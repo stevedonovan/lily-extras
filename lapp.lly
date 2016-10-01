@@ -1,0 +1,326 @@
+import scan
+import xstr
+
+var raise_error = true
+
+define error(msg: String) {
+   if raise_error:
+      raise RuntimeError(msg)
+   else:
+      xstr.exit(1)
+}
+
+define parse_bool(str: String): Boolean {
+   if str=="true" || str=="1": return true else: return false
+}
+
+define parse_i(str: String): Integer {
+   var res = xstr.parse_i(str,0)
+   if res.is_none(): error($"'^(str)' is not a valid integer")
+   return res.unwrap()
+}
+
+define parse_d(str: String): Double {
+   var res = xstr.parse_d(str)
+   if res.is_none(): error($"'^(str)' is not a valid floating-point number")
+   return res.unwrap()
+}
+
+enum Type {
+   BooleanType
+   StringType
+   IntegerType
+   DoubleType
+
+   define parse_value(str: String): Dynamic {
+      match (self): {
+      case BooleanType:
+         return Dynamic(parse_bool(str))
+      case StringType:
+         return Dynamic(str)
+      case IntegerType:
+         return Dynamic(parse_i(str))
+      case DoubleType:
+         return Dynamic(parse_d(str))
+      }
+   }
+
+   define name: String {
+      match(self): {
+      case StringType:  return "string"
+      case BooleanType: return "boolean"
+      case IntegerType: return "integer"
+      case DoubleType: return "double"
+      }
+   }   
+   
+}
+
+class Argument(name: String, short: String, type: Type, defval: Option[Dynamic],posn: Integer) {
+   var @name = name
+   var @short = short
+   var @type = type
+   var @defval = defval
+   var @posn = posn
+   var @value = None
+   var @needs_value = type != BooleanType
+   var @is_set = false
+   
+   if type == BooleanType: @defval = Some(Dynamic(false))
+
+   define setval(str: String) {
+      @value = Some(@type.parse_value(str))
+      @is_set = true
+   }
+   
+   define set {
+      @value = Some(Dynamic(true))
+      @is_set = true
+   }
+   
+   define clear {
+      @value = None
+      @is_set = false
+   }
+
+   define check {
+        if @defval.is_some(): {
+            @value = @defval
+        else:
+            error($"'^(@name)' is a required flag")
+       } 
+   }
+   
+   define getval(t: Type): Dynamic {
+      if t != @type: error($"'^(@name)' has type ^(@type) not ^(t)")
+      return @value.unwrap()
+   }
+   
+   define tostr: String {
+      return $"^(@name) (^(@short)) ^(@type) ^(@defval): ^(@value)"
+   }
+   
+   define assignment {
+      print($"var ^(@name) = args.^(@type.name())(\"^(@name)\")")
+   }
+
+}
+
+define type_from_name(str: String): Type{
+   if str == "string": {
+      return StringType
+   elif str == "integer":
+      return IntegerType
+   elif str == "double":
+      return DoubleType
+   else:
+      error("unknown argument type")
+   }
+   return BooleanType
+}
+
+define type_from_value(v: String, t: scan.TokenType): Type {
+   if t == scan.Str: {
+      return StringType
+   elif t == scan.Num: 
+         if v.find(".").is_some(): return DoubleType
+         else: return IntegerType
+   else:
+      return StringType
+   }
+}
+
+
+class Args (str: String) < scan.Scan("") {
+   var @lines = str.split("\n")
+   var @arguments: List[Argument] = []
+   var @pos = 1
+   
+   define argument_by_predicate(p: Function(Argument => Boolean)): Option[Argument] {
+      var args = @arguments
+      for i in 0...args.size()-1: {
+         if p(args[i]):
+            return Some(args[i])
+      }
+      return None
+   }
+
+   define argument_from_name(name: String): Argument {
+      var oa = argument_by_predicate{|a| a.name == name }
+      if oa.is_none():  error($"no such long flag '^(name)'")
+      return oa.unwrap()
+   }
+
+   define argument_from_short(name: String): Argument {
+      var oa = argument_by_predicate{|a| a.short == name }
+      if oa.is_none():  error($"no such short flag '^(name)'")
+      return oa.unwrap()
+   }
+   
+   define argument_from_position(posn: Integer): Argument {
+      var oa = argument_by_predicate{|a| a.posn == posn}
+      if oa.is_none():  error($"no such positional argument '^(posn)'")
+      return oa.unwrap()
+   }
+   
+   define parse_line(line: String) {
+#      print(line)
+      reset(line)
+      var name = ""
+      var short = ""
+      var posn = 0
+
+      # May have a flag definition
+      # --long,-s or --long or -s
+      skip_space()
+      if @char == "--": {
+         get()
+         name = collect_while{|c| c != "," && c != " "}
+         if @char == ",": {
+            get()
+            skip_space()
+         }
+      }
+      if @char == "-": {
+         get()
+         short = @char
+         if name == "": {
+            name = short
+         }
+      elif @char == "<": # a positional argument
+         get()
+         name = collect_while{|c| c != ">"}
+         short = ""
+         posn = @pos
+         @pos += 1
+      }
+      if name == "" && short == "":
+          return
+      # there may be an explicit (TYPE) specifier or (default VALUE)
+      var t = BooleanType
+      var defval = None
+      get()
+      skip_space()
+      if @char == "(": {
+         get()  next()
+         # the type is deduced from the default value
+         if @val == "default": {
+            next()
+            t = type_from_value(@val,@type)
+            defval = Some(t.parse_value(@val))
+         else:
+            t = type_from_name(@val)
+         }
+      }
+      var a = Argument(name,short,t,defval,posn)
+      print(a.tostr())
+      @arguments.push(a)
+   }
+
+   tokens("--")
+   @lines.each{|s| parse_line(s) }
+
+   define parse_args(ls: List[String]) {
+      var i = 1, k = 1
+      var end = ls.size()-1
+
+      define next_arg(flag: String): String {
+         i += 1
+         if i > end: error($"flag ^(flag) needs a value")
+         var arg = ls[i]
+         if arg[0] == "-": error($"flag ^(flag) needs a value")
+         return arg
+      }
+      
+      define all_flags {
+         print ("gotcha")
+         # In general something like --abc (multiple flags)
+         # The FIRST flag that needs a value gets the REST
+         # of the argument (e.g. -n10), otherwise next argument
+         while get(): {
+            var flag = @char
+            var a = argument_from_short(flag)
+            if a.needs_value: {
+               var arg = ""
+               if get():
+                  arg = collect_line()
+               else:
+                  arg = next_arg(flag)
+               a.setval(arg)
+            else:
+               a.set()
+            }
+         }
+      }
+      
+      print("start")
+      while i <= end: {
+         reset(ls[i])
+         if @char == "--": {
+            get()
+            var flag = collect_line()
+            var a = argument_from_name(flag)
+            if a.needs_value:
+               a.setval(next_arg(flag))
+            else:
+               a.set()
+         elif @char == "-":
+            all_flags()
+         else:
+            argument_from_position(k).setval(ls[i])
+            k += 1
+         }
+         i += 1
+      }
+      print("finis")
+
+      @arguments.each{|a|
+         if ! a.is_set: a.check()
+         print(a.tostr())
+      }
+
+   }
+   
+   define clear {
+      @pos = 1   
+      @arguments.each{|a| a.clear() }
+   }
+   
+   define assignments {
+      @arguments.each{|a| a.assignment() }
+   }
+
+   define string(name: String): String {
+      return argument_from_name(name).getval(StringType).@(String).unwrap()
+   }
+   
+   define integer(name: String): Integer {
+      return argument_from_name(name).getval(IntegerType).@(Integer).unwrap()
+   }
+   
+   define double(name: String): Double {
+      return argument_from_name(name).getval(DoubleType).@(Double).unwrap()
+   }
+   
+   define boolean(name: String): Boolean {
+      return argument_from_name(name).getval(BooleanType).@(Boolean).unwrap()
+   }
+
+}
+
+var args = Args("""
+   A comment line
+   --one, -o (default 0) an integer
+   -v verbose flag
+   -t (default 'frodo')
+   --str (string)
+    <file> (default 'out')
+""")
+#var args = Args("  --str (string)")
+args.parse_args(["bork","--str","hello","fred"]) #,"--one","42"])
+args.clear()
+args.parse_args(["bork","--str","hello","--one","42","-v"])
+args.clear()
+args.parse_args(["bork","--str","hello","-vo42","boo","foo"]) #,"42"])
+
+#args.assignments()

@@ -1,0 +1,53 @@
+# Some xstr examples for
+# next, size
+# readall
+# shell
+
+import xstr
+
+class StrIter(s: String) {
+   var @s = s
+   var @i = 0
+   var @char = "*"
+
+   define next : Boolean {
+      if @i == -1: {
+         return false
+      }
+      var res = xstr.next(@s,@i)
+      @char = res[0]
+      @i = res[1]
+      return true
+   }
+
+}
+
+# iterate over all characters, multibye or not
+var s = "Δn=α"
+var iter = StrIter(s)
+print(xstr.size(s))
+var k = 0
+while iter.next(): {
+   print($"character '^(iter.char)'")
+   k += 1
+#   if k > 6: break
+}
+
+# slurp in the whole of this file
+var f = File.open("Makefile","r")
+var all = xstr.readall(f)
+f.close()
+
+# number of _characters_ in all
+print(xstr.size(all))
+
+var shell = xstr.shell
+shell("ls *.lly").split("\n").each{|file|
+   var size = shell($"stat -c %s ^(file)")
+   print($"^(file): ^(size)b")
+}
+
+print(shell("which lilyu 2>&1"))
+
+
+

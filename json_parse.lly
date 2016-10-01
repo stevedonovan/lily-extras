@@ -1,0 +1,79 @@
+import json
+import scan
+import xstr
+
+define parse_b (str: String): Boolean {
+   if str == "true": return true else: return false
+}
+
+define parse_d (s: scan.Scan, str: String): Double {
+   var od = xstr.parse_d(str)
+   if od.is_none(): s.error("not a number '^(str)'")
+   return od.unwrap()
+}
+
+define parse(s: scan.Scan): json.Object {
+   s.next()
+   if s.type == scan.Char: {
+      if s.val == "{": { # json object
+         var map: Hash[String,json.Object] = []
+         while s.val != "}": {
+            s.next()
+            if s.val == "}": break
+            s.assert_type(scan.Str)
+            var key = s.val
+            s.expecting_char(":")
+            map[key] = parse(s)
+            s.expecting_either_char(",}")
+         }
+         return json.O(map)
+      elif s.val == "[": # json array
+         var arr: List[json.Object] = []
+         while s.val != "]": {
+            arr.push(parse(s))
+            s.expecting_either_char(",]")
+         }
+         return json.A(arr)
+      }
+   elif s.type == scan.Num:
+      return json.N(parse_d(s,s.val))
+   elif s.type == scan.Str:
+      return json.S(s.val)
+   elif s.type == scan.Key:
+      if s.val == "null": {
+         return json.Null
+      else:
+         return json.B(parse_b(s.val))
+      }
+   elif s.type == scan.Iden:
+      s.error($"unknown identifer '^(s.val)'")
+   else:
+      s.error("end of string")
+   }
+   return json.Null
+}
+
+define parse_string(str: String): json.Object {
+   var s = scan.Scan(str)
+   s.set_line_comment("//")
+   s.set_block_comment("/*","*/")
+   s.keywords("null","true","false")
+   return parse(s)
+}
+
+#var j = parse_string("[10,20,[31,32]")
+var str = """
+{
+   'one':10,
+   'two':true,
+   'three':{},
+   'four':[1,2,3,4],
+   "five": { // comment!
+      "bonzo": "dog",
+      "frodo": "hobbit",
+      "felix"/*name*/: "cat"
+   }
+}
+"""
+var j = parse_string(str)
+print(j.as_str())

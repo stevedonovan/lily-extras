@@ -1,0 +1,4 @@
+import mod
+print(mod.answer())
+print(mod.frodo)
+

@@ -1,0 +1,275 @@
+## A lexical scanner
+# Given a string, the next() method of a `Scan` object returns
+# a token type: character, string, number, keyword or 'end of string'
+# The scanner can be given a list of strings that are considered to be 
+# keywords. It is possible to define new character tokens with size 2,
+# like '<<" or '/*'.  Both line and block comment characters can be 
+# defined, and are considered whitespace.
+import xstr
+
+## A class for iterating through a string
+# Captures multibyte characters using `xstr.next`
+class Iter(s: String) {
+   var @s = s
+   var @i = 0
+   var @char = ""
+
+   ## grab next character.
+   # Returns false if we have finished iterating
+   define next : Boolean {
+      if @i == -1: return false
+      var res = xstr.next(@s,@i)
+      @char = res[0]
+      @i = res[1]
+      return true
+   }
+
+   ## look ahead at the next character
+   # (this could be an empty string if we're already at the end)
+   define peek: String {
+      var res = xstr.next(@s,@i)
+      return res[0]
+   }
+
+    ## set a new string to be iterated over
+    define reset(str: String) {
+         @s = str
+         @i = 0
+    }
+
+}
+
+## the kinds of token that are output by `Scan`
+enum TokenType {
+   Char
+   Iden
+   Num
+   Str
+   Key
+   End
+}
+
+## a simple lexical scanner.
+# Initialize with a scan.Iter and call the `next` method repeatedly
+# until it returns scan.End.
+class Scan(si: String){
+   #var @s = si
+   var @s = Iter(si)
+   var @val = ""
+   var @type = End
+   var @eof = false
+   var @char = ""
+   var @extras: Hash[String,List[String]] = []
+   var @keyword: Hash[String,Boolean] = []
+   var @line_comment = ""
+   var @block_comment_start = ""
+   var @block_comment_end = ""
+
+   define error(msg: String) {
+      raise RuntimeError($"scanner ^(msg)\n")
+   }
+
+   ## specify what identifiers are to be considered _keywords_
+   define keywords(keyw: String...) {
+      for i in 0...keyw.size()-1:
+         @keyword[keyw[i]] = true
+   }
+
+   ## define multi-character tokens
+   # e.g s.tokens("//","/*","*/")
+   define tokens(toks: String...) {
+      # the above arguments would result in this map:
+      # ["/"=>["/","*"],"*"=>["/"]]
+      var extras = @extras
+      for i in 0...toks.size()-1:  {
+         var tok = toks[i]
+         if xstr.size(tok) > 1: {         
+            var first = tok[0]
+            if ! extras.has_key(first):
+                extras[first] = []
+            extras[first].push(tok[1])
+         }
+      }
+   }
+   
+   ## define single line comment
+   define set_line_comment(ch: String) {
+      @line_comment = ch
+      tokens(ch)
+   }
+   
+   ## define block comment as a pair of character tokens
+   define set_block_comment(start: String, end: String) {
+      @block_comment_start = start
+      @block_comment_end = end
+      tokens(start,end)
+   }
+
+   private define find_token_extra(ch: String): String {
+      if ! @extras.has_key(ch):
+         return ""
+      var nxt = @s.peek()
+      var ls = @extras[ch]
+      var n = ls.size()-1
+      for i in 0...n: {
+         if ls[i] == nxt: return $"^(ch)^(ls[i])"
+      }
+      return ""
+   }
+
+   ## grab the next character, expanding any defined double-chars
+   define get: Boolean {
+      if @s.next(): {
+         @char = @s.char
+         var char = find_token_extra(@char)
+         if char != "": {
+            get()
+            @char = char
+         }
+         return true
+      else:
+         @char = @s.char
+         @eof = true
+         return false
+      }
+   }
+
+   get()
+
+   ## set a new string to be scanned
+   define reset(str: String) {
+        @s.reset(str)
+        @eof = false
+        get()
+   }
+
+   ## all following characters matching the predicate
+   define collect_while (fn: Function(String => Boolean)): String {
+      var ls = [@char]
+      get()
+      while fn(@char): {
+         ls.push(@char)
+         if ! get(): break
+      }
+      return ls.join("")
+   }
+
+   ## rest of current line
+   define collect_line: String {
+      return collect_while {|ch| ch != "\n" }
+   }
+
+   ## ignore any following characters that match the predicate
+   define skip_while (fn: Function(String => Boolean)) {
+     while fn(@char): {
+         if ! get(): break
+     }
+  }
+  
+   ## ignore the rest of the line
+   define skip_line {
+      skip_while{|ch| ch != "\n"}
+   }
+   
+   ## skip any following whitespace
+   # (we may hit end-of-stream)   
+   # Comments are considered to be whitespace
+   define skip_space: Boolean {
+      if @eof: return false
+      while @char.is_space(): {
+         if ! get():
+            return false
+      }
+      # might be a COMMENT
+      if @char == @line_comment: {
+         skip_line()
+         skip_space()
+      elif @char == @block_comment_start: 
+         var endch = @block_comment_end
+         skip_while{|ch| ch != endch}
+         get() # past the end
+         skip_space()
+      }      
+      return true
+   }
+
+   private define set(t: TokenType, v: String) {
+      @type = t
+      @val = v
+   }
+
+   ## grab the next token from the scanner.
+   # Returns the kind of type, and updates
+   # the @char and @type properties
+   define next: TokenType {
+      if ! skip_space(): {
+         @type = End
+         return End
+      }
+      var ch = @char
+      if ch.is_alpha(): {
+         var value = collect_while(String.is_alnum)
+         if @keyword.has_key(value):
+            set(Key,value)
+         else:
+            set(Iden,value)
+      elif ch.is_digit():
+         set(Num,collect_while(String.is_digit))
+      elif ch == "\"" || ch == "'":
+         get()
+         if @char == "\"" || @char == "'": {
+            set(Str,"")
+            get()
+         else:
+            set(Str,collect_while {|c| c != ch})
+            get()
+         }
+      else:
+         set(Char,ch)
+         get()
+      }
+      return @type
+   }
+
+   ## friendly text representation of current token
+   define token_name: String {
+      return $"^(@type)('^(@val)')"
+   }
+
+   ## expecting a particular character
+   define expecting_char(ch: String) {
+      next()
+      if ! (@type == Char && @val == ch):
+         error($"expecting '^(ch)' got ^(token_name())")
+   }
+
+   ## expecting either of two characters
+   define expecting_either_char(chars: String) {
+      var ch1 = chars[0], ch2 = chars[1]
+      next()
+      if ! (@type == Char && (@val == ch1) || (@val == ch2)):
+         error($"expecting '^(ch1)' or '^(ch2)' got ^(token_name())")
+   }
+
+   ## expecting a particular kind of token
+   define expecting_type(t: TokenType): String {
+      next()
+      if @type != t:
+         error($"expecting ^(t) got ^(@type)")
+      return @val
+   }
+
+   ## assert that the current kind is correct
+   define assert_type(t: TokenType) {
+      if @type != t:
+         error($"expecting ^(t) got ^(@type)")
+   }
+
+   ## general assertion
+   define assert(c: Boolean, msg: String) {
+      if ! c:
+         error($"assertion failed: ^(msg)")
+   }
+
+}
+

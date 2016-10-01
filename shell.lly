@@ -1,0 +1,57 @@
+# demonstrating xstr shell, concat, print, format
+import xstr
+var shell = xstr.shell
+
+define which(cmd: String): Option[String] {
+   var res = shell($"which ^(cmd) 2> /dev/null || echo F@1L")
+   if res == "F@1L":
+      return None
+   else:
+      return Some(res)
+}
+
+# also have -r (read) -w (writeable) -x (executable) -f (file)
+# -d (directory)
+
+define access(file: String, how: String): Boolean {
+   var res = shell($"test -^(how) ^(file) && echo OK")
+   return res == "OK"
+}
+
+var exists = {|file:String| access(file,"e")}
+
+print(which("lily"))
+print(which("lolly"))
+print(exists("shell.lly"))
+
+xstr.print("one",10,"four",["one"],["one"=>true])
+print ("eh")
+
+print(xstr.concat(":","hello",42))
+
+define P(s:String) {
+   print($"'^(s)'")
+}
+
+var fmt = xstr.format
+P(fmt(" {} H {} |","hello",42))
+P(fmt("{}{}","hello",42))
+P(fmt("value was {} after {}s",2.3,42))
+P(fmt("value was {0} after {1}s",2.3,42))
+P(fmt("value was {1} after {0}s",42,2.3))
+
+var gparms = ["one"]
+var s = gparms.join(",")
+P(fmt("[{}]",s.upper()))
+
+
+# this will blow up
+try:
+   fmt("value was {} and {}",20)
+except IndexError as e:
+   print(e.message)
+
+
+
+
+

@@ -1,0 +1,70 @@
+import scan
+
+var all = "-hello('dolly') 42 -- αbonzo=dog, felix=cat \"how\""
+var tok = scan.Scan(all)
+tok.tokens("--")
+var ntok = 0
+while tok.next() != scan.End: {
+   print($"^(tok.type): '^(tok.val)'")
+   ntok += 1
+}
+print(ntok)
+
+all = """
+{
+   "alpha": 10,
+   "beta": 20, // random stuff
+   "gamma": [null,true,"bonzo"/*  comment */,42]
+}
+"""
+
+tok = scan.Scan(all)
+tok.tokens("//","/*","*/")
+tok.keywords("null","true","false")
+var type = tok.next()
+while type != scan.End: {
+    if tok.val == "//": { # skip rest of line
+      tok.skip_line()
+    elif tok.val == "/*":
+       tok.skip_while{|ch| ch != "*/"}
+       tok.next()
+    else:
+      print($"^(tok.type): '^(tok.val)'")
+   }
+   type = tok.next()
+}
+
+# read a configuration file into a Hash
+all = """
+# bonzo dog!
+alpha=23
+
+beta=as much as we can get
+"""
+
+tok = scan.Scan(all)
+var map: Hash[String,String] = []
+type = tok.next()
+while type != scan.End: {
+    if type == scan.Char && tok.val == "#": {
+        tok.skip_line()
+    elif type == scan.Iden:
+        var key = tok.val
+        tok.expecting_char("=")
+        var rest = tok.collect_line()
+        map[key] = rest
+    }
+    type = tok.next()
+}
+print(map)
+print(map == ["beta" => "as much as we can get", "alpha" => "23"])
+
+try: {
+   all = "dog;"
+   tok = scan.Scan(all)
+   tok.next()
+   tok.expecting_char(":")
+except RuntimeError as e:
+   print($"scan failed: ^(e.message)")
+}
+

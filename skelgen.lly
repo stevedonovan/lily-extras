@@ -1,0 +1,660 @@
+import sys
+import scan
+import xstr
+var P = xstr.print
+var format = xstr.format
+
+# index of value in a list - like String.find returns None if not present
+define list_find[A](ls: List[A], value: A): Option[Integer] {
+    var nm1 = ls.size()-1
+    for i in 0...nm1: {
+        if ls[i] == value:
+            return Some(i)
+    }
+    return None
+}
+
+# all files in current directory matching a mask
+# Useful for checking file existence as well.
+define files_matching(mask: String): List[String] {
+   var cmd = $"ls ^(mask) 2> /dev/null"
+   var res = xstr.shell(cmd).split(" ")
+   if res.size() == 1 && res[0] == "":
+       return []
+    else:
+        return res
+}
+
+# iterating over lines in a file is sufficiently irritating
+# to require a convenient wrapper
+class Lines(f: File) {
+    var @f = f
+    var @line = ""
+    var @lno = 0
+
+    define next: Boolean {
+        var rs = f.read_line()
+        if rs == B"": return false
+        @line = rs.encode().unwrap().rstrip(" \n")
+        return true
+    }
+}
+
+# The basic Lily types, mapped to the number of generic type parameters.
+# The Odd Fellows are 'Function' (N/A) and 'Tuple' which can take
+# an indefinite number
+var known_types = [
+    "String" => 0, "ByteString" => 0, "File" => 0,
+    "Double" => 0, "Integer" => 0, "Boolean" => 0,
+    "List" => 1, "Option" => 1,
+    "Hash" => 2, "Either" => 2,
+    "Function" => 999, "Tuple" => -1
+]
+
+var custom_types: Hash[String,Boolean] = []
+
+define add_new_type(name: String, ngen: *Integer = 0) {
+    known_types[name] = ngen
+    custom_types[name] = true
+}
+
+# primitive types have a basic underlying C type
+# String is borderline; for _most purposes_, the raw string is most convenient
+# unless the string is so large that strlen becomes a bottleneck
+var primitives = [
+    "Double" => "double", "Integer" => "int64_t", "Boolean" => "int", "String" => "const char*"
+]
+
+# Four our purposes, a type is simply a name which may have generic
+# type parameters, and (optionally) a return type in the special case
+# of Function
+class Type (name: String, parms: List[Type], parameter_type: Boolean) {
+    var @name = name
+    var @parms = parms
+    var @return_type: Option[Type] = None
+    var @parameter_type = parameter_type
+
+    define type: String {
+        if @parameter_type:
+            return "value"
+        elif @name == "String":
+            return "string_raw"
+        elif @name == "Option" || @name == "Either":
+            return "instance"
+        elif custom_types.has_key(@name):
+            return "foreign"
+        else:
+            return @name.lower()
+    }
+
+    define c_type: String {
+        if primitives.has_key(@name):  {
+            return primitives[@name]
+        else:
+            var lname = type()
+            if lname == "foreign":
+                lname = @name.lower()
+            return $"lily_^(lname)_val*"
+        }
+    }
+
+    define tostr: String {
+        var pp =""
+        if @parms.size() > 0 || @name == "Function": {
+            pp = @parms.map{|t| t.tostr() }.join(",")
+            if @name != "Function": {
+                pp  = format("[{}]",pp)
+            else:
+                var rt = ""
+                if @return_type.is_some():
+                    rt = format(" => {}",@return_type.unwrap().tostr())
+                pp = format("({}){}",pp,rt)
+            }
+        }
+        return $"^(@name)^(pp)"
+    }
+
+    define is_unit: Boolean {
+        return @name == "Unit"
+    }
+}
+
+class Arg (name: String, type: Type, defval: Option[String], idx: Integer) {
+    var @name = name
+    var @type = type
+    var @defval = defval
+    var @idx = idx
+    
+    define optional: Boolean {
+        return @defval.is_some()
+    }
+    
+    # How Lily default values are represented in C
+    define c_defval: String {
+        var defv = @defval.unwrap()
+        if @type.name == "String":  {
+            defv = $"\"^(defv)\""
+        elif @type.name == "Boolean":
+            if defv=="true": return "1" else: return "0"        
+        }
+        return defv
+    }
+
+    define tostr: String {
+        var tname = ""
+        return $"^(@name): ^(@type.tostr())"
+    }
+}
+
+class FunctionSig (name: String, args: List[Arg], returns: Type, gparms: List[String]) {
+    var @name = name
+    var @args = args
+    var @returns = returns
+    var @gparms = gparms
+
+    define tostr: String {
+        # any generic type parameters?
+        var gg = ""
+        if @gparms.size() > 0: {
+            gg = format("[{}]", @gparms.join(","))
+        }
+        # returns a value?
+        var tname = ""
+        if ! @returns.is_unit(): {
+            tname = format(": {}", @returns.tostr())
+        }
+        # any arguments?
+        var tt = ""
+        if @args.size() > 0: {
+            tt = format("({})", @args.map{|a| a.tostr() }.join(", "))
+        }
+        return $" ^(@name)^(gg) ^(tt)^(tname)"
+    }
+
+}
+
+# After parsing a type, the current token will be advanced
+define parse_type(s: scan.Scan, generics: List[String]): Type {
+    # we must start with a word which is either of the known types
+    # or one of the function's generic type parameters.
+    # '1' is a special type meaning 'anything'
+    s.assert(s.type == scan.Iden || s.val == "1",$"expecting typename, not ^(s.type)")
+    var tname = s.val
+    var parameter_type = list_find(generics,tname).is_some() || tname == "1"
+    var rtype = known_types.has_key(tname)
+    if !  rtype && ! parameter_type:
+        s.error($"not a known type or generic parameter: ^(tname)")
+
+     # Functions are Special, following Function(TYPES {=> RT}) pattern
+    if tname == "Function": {
+        s.expecting_char("(")
+        var ftypes: List[Type] = []
+        while s.val != ")" && s.val != "=>": {
+            s.next()
+            var t = parse_type(s,generics)
+            if s.val != "," && s.val != "=>" && s.val != ")": {
+                stderr.print(s.val)
+                s.error("expecting comma or => in Function type")
+            }
+            ftypes.push(t)
+        }
+        var ft = Type(tname,ftypes,parameter_type)
+        # at this point, the current token is either ')' or '=>'
+        if s.val == "=>": {
+            s.next()
+            var t = parse_type(s,generics)
+            ft.return_type = Some(t)
+        }
+        s.next()
+        return ft
+    }
+
+    # there may be type parameters
+    var ngp = 0
+    if rtype: ngp = known_types[tname]
+    s.next()
+    var gtypes: List[Type] = []
+    if s.val == "[": {
+        if ngp == 0: s.error($"not a generic type ^(tname)")
+        while s.val != "]": {
+            s.next()
+            var t = parse_type(s,generics)
+            s.assert(s.val == "," || s.val == "]","expecting , or ] in generic type args")
+            gtypes.push(t)
+        }
+        if ngp != -1 && gtypes.size() != ngp:
+            s.error("wrong number of type parameters for ^(tname)")
+        s.next()
+    }
+    var T = Type(tname,gtypes,parameter_type)
+
+    # variadic arguments.. (A...) is actually (List[A])
+    # The scanner can't do a 3-char custom token yet, hence the hack
+    if s.val == "..": {
+        var actual_type = Type("List",[T],false)
+        s.next() # skip 3rd .
+        #s.next()
+        T = actual_type
+        if s.val == ",":
+            s.error("variadic argument must be last")
+    }
+    return T
+}
+
+define parse_function(s: scan.Scan, fname: String): FunctionSig {
+   s.next()
+   s.assert(s.type == scan.Char,"expecting function definition")
+   # this may be a generic function
+   var gparms: List[String] = []
+   if s.val == "[": {
+      while s.val != "]": {
+         s.next()
+         gparms.push(s.val)
+         s.expecting_either_char(",]")
+      }
+      s.next()
+   }
+   # arguments
+   var args: List[Arg] = []
+   if s.val == "(": {
+      while s.val != ")": {
+         var defval = None
+         s.next()
+         var pname = s.val         
+         s.expecting_char(":")
+         s.next()
+         var optional = s.val == "*"
+         if optional:
+             s.next()
+         var ptype = parse_type(s,gparms)
+         if optional: {
+            if s.val != "=": s.error("expecting = for default value for optional")
+            s.next()
+            defval = Some(s.val)
+            s.next()
+         }
+         # remember, parse_type has already moved onto next token...
+         if ! (s.val == "," || s.val == ")"):
+            s.error($"expecting , or ) in argument list, got ^(s.val)")
+        # we reserve 's' for the Lily state
+        if pname == "s": pname = "s_"
+         args.push(Arg(pname,ptype,defval,args.size()))
+      }
+      s.next()
+   }
+   # return type
+   var rtype = Type("Unit",[],false)
+   if s.val == ":": {
+      s.next()
+      rtype = parse_type(s,gparms)
+    }
+    return FunctionSig(fname,args,rtype,gparms)
+}
+
+#### Code Generation
+# Now that parsing is over, the interesting stuff can begin.
+
+define cond (c: Boolean, value: String, defv: *String=""): String {
+    if c: return value else: return defv
+}
+
+define constructor(t: Type): String {
+    var name = t.name
+    if name == "List":
+        return "lily_new_list_val_n(values_needed)"
+    elif name == "Integer" || name == "Double":
+        return "= 0"
+    elif name == "String":
+        return "= \"\""
+    elif t.type() == "foreign":
+        return ""
+    else:
+        return "= ??"
+}
+
+class Codegen {
+    var @ss: List[String] = []
+    
+    define puts(s: String) {
+        @ss.push(s)
+    }
+    
+    define tostr: String {
+        return @ss.join("\n")
+    }
+
+    define return_var(varname: String, rtype: Type) {
+        var ctype = rtype.c_type()
+        puts($"    ^(ctype) ^(varname) ^(constructor(rtype));")
+    }
+    
+    define return_expr(name: String, type: String): String {
+        var cast = cond(type=="foreign","(lily_foreign_val*)")
+        return $"^(cast)^(name)"
+    }
+
+    define return_statement(rtype: Type, name: *String="return_value") {
+        var type = rtype.type()
+        puts($"    lily_return_^(type)(s,^(return_expr(name,type)));")
+    }
+
+    define return_none {
+        puts("""
+    // none branch
+    lily_return_empty_variant(s, lily_get_none(s));
+        """)
+    }
+
+    define return_variant(variant: String, returns: String, rtype: Type) {
+        var vname = $"^(variant)_val"
+        var type = rtype.type()
+        puts($"""
+    // ^(variant) branch
+    lily_instance_val *^(vname) = lily_new_^(variant)();
+    lily_variant_set_^(type)(^(vname), 0, ^(return_expr(returns,type)));
+    lily_return_filled_variant(s,^(vname));
+        """)
+    }
+
+    # arguments are easy when you know the Lily type and the corresponding C type
+    define define_argument(a: Arg) {
+        var type = a.type.type(), ctype = a.type.c_type()
+        var arg_get = $"lily_arg_^(type)(s,^(a.idx))"
+        var arg_dcl = $"^(ctype) ^(a.name) ="
+        # custom types need a typecast....
+        if type == "foreign": 
+            arg_dcl = $"^(arg_dcl) (^(ctype))"
+        if a.optional(): 
+            arg_get = $"(lily_arg_count(s) > ^(a.idx)) ? ^(arg_get) : ^(a.c_defval())"
+            
+        puts($"    ^(arg_dcl) ^(arg_get);")
+
+        if type == "function": {
+            puts("")
+            var parms = a.type.parms
+            for i in 0...parms.size()-1:
+                puts($"    lily_push_^(parms[i].type())(s, ??);")
+            #parms.each{|p| puts($"    lily_push_^(p.type())(s, ??);") }
+            puts($"    lily_exec_simple(s,^(a.name), ^(parms.size()));")
+            var rtype = a.type.return_type
+            if rtype.is_some():
+               puts($"    lily_result_^(rtype.unwrap().type())(s);")
+         }
+    }
+
+}
+
+var package = "", klass = ""
+var klass_ctor = ""
+var klass_count = 0
+
+define create_class: String {
+    var g = Codegen()
+    var name = klass.lower()
+    var type = $"lily_^(name)_val"
+    g.puts("typedef struct {\nLILY_FOREIGN_HEADER_WITH_EXTRA(pad)")
+    g.puts("    // your fields go here")
+    g.puts($"} ^(type);\n")
+    add_new_type(klass)
+    g.puts($"""
+static void destroy_^(name) (lily_generic_val *g)
+{
+    ^(type) *result = (^(type)*)g;
+    // your cleanup code here"
+    lily_free(g);
+}
+    """)
+    klass_ctor = $"""
+    return_value = lily_malloc(sizeof (^(type)));
+    return_value->refcount = 0;
+    return_value->instance_id = lily_get_cid_table(s)[^(klass_count)];
+    return_value->destroy_func = destroy_^(name);
+"""
+    klass_count += 1
+    return g.tostr()
+}
+
+define generate_prototype (F: FunctionSig, method: Boolean): String {
+    var g = Codegen()
+    var cls = ""
+    var ctor = false
+    if method: {
+        ctor = F.args.size() == 0 || F.args[0].name != "self"
+        cls = klass
+    }
+    g.puts($"void lily_^(package)_^(cls)_^(F.name) (lily_state *s)\n{")
+    
+    F.args.each{|a| g.define_argument(a) }
+   
+    var rtype = F.returns
+    var type = F.returns.type()
+    var parms = F.returns.parms
+    var rname = F.returns.name    
+    
+    # the 'heterogenous containers' are treated differently - these are our 'muliple return' stratagies
+    if ! rtype.is_unit(): {
+        if rname == "Option": {
+            g.return_var("return_some",parms[0])
+        elif rname == "Either":
+            g.return_var("return_right",parms[1])
+            g.return_var("return_left",parms[0])
+        elif rname == "Tuple":
+             parms.each_index {|i|   g.return_var($"return_^(i+1)",parms[i])    }
+        else:
+            g.return_var("return_value",rtype)
+        }
+    }
+
+     if ! rtype.is_unit(): {
+        if rname == "Option": {
+            g.return_variant("some","return_some",parms[0])
+            g.return_none()
+        elif rname == "Either":
+            g.return_variant("right","return_right",parms[1])
+            g.return_variant("left","return_left",parms[0])
+        elif rname == "Tuple":
+            g.puts($"    lily_list_val* return_value = lily_new_list_val_n(^(parms.size()));")
+            parms.each_index {|i|
+                g.puts($"    lily_list_set_^(parms[i-1].type()) (return_value,^(i-1),return_^(i));")
+            }
+            g.return_statement(rtype)
+        elif  type == "foreign":  # custom class
+            if ctor:
+                g.puts(klass_ctor)
+            g.return_statement(rtype)
+        else:
+            g.return_statement(rtype)
+        }
+    }
+   
+    g.puts("}")
+    return g.tostr()
+}
+
+# in order not to be hopelessly irritating, we must not overwrite
+# a generated file. But we do want to _add_ new entries to a file.
+# So we read the dyna_NAME.h file (if it exists) and extract
+# existing entries
+define existing_entries(path: String): List[String] {
+    var functions: List[String] = []
+    var text = ""
+
+    try: {
+        var f = File.open(path,"r")
+        text = xstr.readall(f)
+        f.close()
+    except IOError as e:
+        return functions
+    }
+
+    var S = scan.Scan("")
+    text.split("\n").each{|line|
+        S.reset(line)
+        S.next()
+        if S.val == ",": {
+            S.next() # C stringxt
+            #print(S.val)
+            S.reset(S.val)
+            S.next() # 'F'
+            if S.val == "F": {
+                S.next() # '\'
+                S.next() # 0
+                S.next() # name
+                functions.push(S.val)
+            }
+        }
+    }
+    return functions
+}
+
+# the 'string_raw' macros make our string logic a bit easier...
+var preamble = """
+#include <stdio.h>
+#include "lily_api_embed.h"
+#include "lily_api_alloc.h"
+#include "lily_api_value.h"
+#include "lily_api_msgbuf.h"
+
+#define lily_return_string_raw(s,str) lily_return_string(s,lily_new_raw_string(str))
+#define lily_variant_set_string_raw(v,idx,str) lily_variant_set_string(v, idx, lily_new_raw_string(str))
+#define lily_list_set_string_raw(lv,idx,str) lily_list_set_string(lv,0,lily_new_raw_string(str))
+#define lily_push_string_raw(s,str) lily_push_value(s,lily_new_value_of_string_lit(str))
+
+// your own headers go here...
+"""
+
+define cmake(name: String) {
+    var cmake_files = files_matching("CMakeLists.txt")
+    if cmake_files.size() == 1:
+        return
+    var f = File.open("CMakeLists.txt","w")
+    f.write($"""
+cmake_minimum_required(VERSION 2.6)
+include_directories("/usr/local/lily")
+
+add_library(^(name) SHARED lily_^(name).c)
+set_target_properties(
+    ^(name)
+    PROPERTIES
+        PREFIX ""
+        COMPILE_FLAGS "-fPIC -g"
+)    
+    """)
+    f.close()
+}
+
+var last_block: List[String] = []
+
+define dump_block(o: File, proto: String) {
+    if last_block.size() > 0: {
+        var contents = last_block.join("\n")
+        o.print("/**")
+        o.print(contents)
+        o.print("*/")
+        o.print(proto)
+        last_block.clear()
+    }
+}
+
+var ls = scan.Scan("")
+ls.tokens("=>")
+ls.tokens("..")
+
+define process_file(name: String, path: String, help: String) {
+    var f = File.open(help,"r")
+    var already_defined = existing_entries($"^(path)/dyna_^(name).h")
+    var mode = "w"
+    if already_defined.size() > 0: {
+        mode = "a+"
+    }
+    var o = File.open($"^(path)/lily_^(name).c",mode)
+    if mode == "w": {
+        o.print(preamble)
+        cmake(name)
+    }
+
+    var proto = ""
+    var lines = Lines(f)
+    while lines.next(): {
+        ls.reset(lines.line)
+        ls.next()        
+        if ls.type != scan.End: {
+            var kind = ls.val
+            if kind == "package": {
+                package = ls.expecting_type(scan.Iden)
+            elif kind == "class": 
+                klass = ls.expecting_type(scan.Iden)
+                dump_block(o,proto)
+                proto = create_class()                
+            elif kind == "define" || kind == "method":
+                ls.assert(package != "","package must be specified up front")
+                if kind == "method":  {
+                    ls.assert(klass != "", "specify class for a method")
+                    var klassname = ls.expecting_type(scan.Iden)
+                    ls.next() # .
+                }
+                var fname = ls.expecting_type(scan.Iden)
+                if list_find(already_defined,fname).is_none(): {
+                    var F = parse_function(ls,fname)
+                    dump_block(o,proto)
+                    proto = generate_prototype(F, kind=="method")
+                else:
+                    last_block.clear()
+                    print($"ignoring existing entry '^(fname)'")
+                }
+            }
+        }
+        last_block.push(lines.line)
+    }
+    dump_block(o,proto)
+    # dyna_tools.py will fill this in for us
+    if mode == "w":
+        o.print($"#include \"dyna_^(name).h\"")
+    f.close()
+    o.close()
+}
+
+define start_processing_files(name: String) {
+    var path = name
+    var help = ""
+    if path == ".": {
+        path = "./"
+        var help_files = files_matching("*.help")
+        if help_files.size() == 0: {
+            stderr.print("cannot find <package>.help file")
+            return
+        }
+        help = help_files[0]
+        name = help.split(".")[0]
+    else:
+        help = $"^(path)/^(name).help"
+    }
+    try: {
+        process_file(name,path,help)
+    except Exception as e:
+        stderr.print($"skelgen: ^(e.message)")
+    }
+}
+
+var istart = 0
+define next_arg: String {
+    istart += 1
+    return sys.argv[istart]
+}
+
+if sys.argv.size() == 1: {
+    stderr.print("please supply package directory")
+else:
+    var arg = next_arg()
+    if arg == "-s": {
+        var sig = next_arg()
+        package = "skelgen"
+        ls.reset(sig)
+        var F = parse_function(ls,"test")
+        print(F.tostr())
+        var  proto = generate_prototype(F,false)
+        print(proto)
+    else:
+        start_processing_files(arg)
+    }
+}

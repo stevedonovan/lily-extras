@@ -1,0 +1,39 @@
+import json
+
+# a JSON literal. Currently we need to explicitly
+# name the variants
+var j = json.O([
+  "one" => json.S("hello"),
+  "two" => json.N(23.0),
+  "three" => json.A([json.S("3a"),json.S("3b")]),
+  "four" => json.O([
+      "4a" => json.N(1.0),
+      "4b" => json.N(2.0),
+      "4c" => json.O([
+          "name" =>  json.S("yow")
+      ]),
+      "4d" => json.B(true),
+      "4e" => json.Null
+   ])
+])
+
+# and then can write it out as JSON
+print(j.as_str())
+
+# tedious but sure methods to access objects
+var map = j.to_object()
+if map.is_some(): {
+   var m = map.unwrap()
+   print(m["one"])
+}
+
+j.to_object().and_then{|m|
+   m["two"].to_number().and_then{|x|
+      print(x)
+      None  # goes away when Unit arrives
+   }
+}
+
+# shortcut helper!
+print(json.get(j,"four.4c.name").unwrap().as_string())
+

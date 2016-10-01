@@ -1,0 +1,41 @@
+package os
+
+Useful facilities available on all supported OS platforms
+
+define getenv(v: String): Option[String]
+
+Get the value of the environment variable `v`.
+If it doesn't exist, return None
+
+define chdir(path: String): Boolean
+
+Change current directory to `path`
+
+define access(path: String, flags: String): Boolean
+
+Can `path` be accessed for reading/writing/executing?
+With flags containing any of "wrx"?
+
+define dirname(path: String): String
+
+Directory part of a file path
+
+define basename(path: String): String
+
+File part of the path
+
+define extension(path: String): String
+
+Extension of a file
+
+define exit (code: Integer)
+
+Exit the program with the given return code
+
+define time: Integer
+
+Return the system time in seconds since epoch
+
+define date(fmt: String, t: Integer): String
+
+Format the given time using same flags as `strftime`

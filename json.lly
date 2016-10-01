@@ -1,0 +1,149 @@
+
+enum Object {
+    S(String)
+    N(Double)
+    A(List[Object])
+    O(Hash[String,Object])
+    Null
+    B(Boolean)
+
+    define as_str: String {
+       match self: {
+       case S(s):
+          return $"\"^(s)\""
+       case N(n):
+          return $"^(n)"
+       case A(l):
+          var out = l.map{|v| v.as_str() }.join(",")
+          return $"[^(out)]"
+       case O(m):
+          var out: List[String] = []
+          m.each_pair {|k,v| out.push($"\"^(k)\":^(v.as_str())") }
+          var str = out.join(",")
+          return $"{^(str)}"
+        case Null:
+            return "null"
+        case B(b):
+            if b: return "true" else: return "false"
+       }
+    }
+
+    define to_string: Option[String] {
+       match self: {
+       case  S(s): return Some(s)
+       else: return None
+       }
+    }
+
+    define to_number: Option[Double] {
+       match self: {
+       case N(n): return Some(n)
+       else: return None
+       }
+    }
+
+    define type: String {
+       match self: {
+       case N(n): return "number"
+       case S(n): return "string"
+       case A(n): return "array"
+       case O(n): return "object"
+       case Null: return "null"
+       case B(n): return "bool"
+       }
+    }
+
+    define to_object: Option[Hash[String,Object]] {
+       match self: {
+       case O(n):
+          return Some(n)
+       else: return None
+       }
+    }
+
+    define to_array: Option[List[Object]] {
+       match self: {
+       case A(n): return Some(n)
+       else: return None
+       }
+    }
+
+    define as_number(def: *Double=0.0): Double {
+        var res = to_number()
+        if res.is_some(): return res.unwrap() else: return def
+    }
+
+    define as_string(def: *String=""): String {
+        var res = to_string()
+        if res.is_some(): return res.unwrap() else: return def
+    }
+
+    define as_object: Hash[String,Object] {
+        var res = to_object()
+        if res.is_some(): return res.unwrap() else: return []
+    }
+
+    define as_array: List[Object] {
+        var res = to_array()
+        if res.is_some(): return res.unwrap() else: return []
+    }
+
+    define as_string_array: List[String] {
+        return as_array().map{|e| e.as_string() }
+    }
+
+    define as_number_array: List[Double] {
+        return as_array().map{|e| e.as_number() }
+    }
+
+    define as_object_of_strings: Hash[String,String] {
+        return as_object().map_values{|e| e.as_string() }
+    }
+
+    define as_object_of_numbers: Hash[String,Double] {
+        return as_object().map_values{|e| e.as_number() }
+    }
+
+    #~ define get_strings(path: String): List[String] {
+        #~ var res = get("path")
+        #~ if res.is_some(): return res.unwrap().as_string_array()  else: return []
+    #~ }
+
+    #~ define get_numbers(path: String): List[Double] {
+        #~ var res = get("path")
+        #~ if res.is_some(): return res.unwrap().as_number_array()  else: return []
+    #~ }
+
+    define test: Option[Object] {
+      var map = to_object()
+      if map.is_none(): return None
+      print(map)
+      return Some(self)
+    }
+
+}
+
+ define get(obj: Object, path: String): Option[Object] {
+   var map = obj.to_object()
+   if map.is_none(): return None
+   var n = map.unwrap()
+   var parts = path.split(".")
+   var iend = parts.size()-1
+   for i in 0...iend: {
+       if ! n.has_key(parts[i]):
+          return None
+       obj = n[parts[i]]
+       # next object in chain?
+       var mo = obj.to_object()
+       if mo.is_some():
+          n = mo.unwrap()
+       else:
+          if i == iend:
+             break
+          else:
+               return None
+   }
+   return Some(obj)
+ }
+
+

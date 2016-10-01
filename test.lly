@@ -1,0 +1,47 @@
+## A very simple test framework
+# We use the built-in calltrace() to indicate where the
+# assertion failed.
+
+## print an error message if the condition failed
+# May override the default message
+define assert(v: Boolean, msg: *String = "") {
+   if ! v: {
+      var ct = calltrace()
+      if ! msg:
+         msg = $"assertion failed ^(ct[0])"
+      stderr.print(msg)
+   }
+}
+
+define abs(x: Double): Double {
+   if x < 0: x = -1.0*x
+   return x
+}
+
+## common case of comparing two values
+define assert_eq[A] (x: A, y: A) {
+   if x != y: {
+      stderr.print($"^(x) is not equal to ^(y)")
+      assert(false)
+   }
+}
+
+## when comparing floating-point numbers, allow for a little difference
+define assert_eq_d(x: Double, y: Double, eps: *Double=1.0e-8) {
+   var diff = abs(x - y)
+   assert(diff < abs(x/eps)) 
+}
+
+## complains if the callback did NOT raise the error indicated
+define assert_raise(msg: String, fn: Function()) {
+   try: {
+      fn()
+      stderr.print("did not raise an exception")
+      assert(false)
+   except Exception as e:
+      if ! e.message.ends_with(msg): {
+         stderr.print("exception did not match!")
+         assert(false)
+      }
+   }
+}
