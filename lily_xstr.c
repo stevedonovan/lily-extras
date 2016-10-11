@@ -189,7 +189,7 @@ static void concat(lily_state *s, lily_msgbuf *msgbuf, char ch, lily_list_val *l
       lily_value *v = lily_list_value(lv,i);
       if (i > 0)
          lily_mb_add_char(msgbuf,ch);
-      lily_vm_add_value_to_msgbuf(s, msgbuf, v);
+      lily_mb_add_value(msgbuf, s, v);
    }
 }
 
@@ -207,6 +207,7 @@ void lily_xstr__print(lily_state *s)
     lily_mb_add_char(msgbuf,'\n');
     fputs(lily_mb_get(msgbuf),stdout);
     lily_mb_flush(msgbuf);
+    lily_return_unit(s);
 }
 
 /**
@@ -274,7 +275,7 @@ void lily_xstr__format(lily_state *s)
             }
             idx++; // skip '}'
             lily_value *v = lily_list_value(lv,i);
-            lily_vm_add_value_to_msgbuf(s, msgbuf, v);
+            lily_mb_add_value(msgbuf, s, v);
         }  else { // end of format string
             lily_mb_add_range(msgbuf,fmt,last_idx, strlen(fmt));
         }
