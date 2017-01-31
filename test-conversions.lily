@@ -11,7 +11,7 @@ test.assert_eq_d(xstr.parse_d("23.3").unwrap(),23.3)
 
 test.assert_eq([1,2,3],[1,2,3])
 var ls = [0]
-test.assert_raise("out of range.",{||
+test.assert_raise("out of range.",(||
   print(ls[1])
-})
+))
 

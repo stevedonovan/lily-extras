@@ -3,15 +3,13 @@
 #include <string.h>
 #include <ctype.h>
 #include "lily_api_embed.h"
-#include "lily_api_alloc.h"
 #include "lily_api_value.h"
 #include "lily_api_msgbuf.h"
 
 /**
 package xstr
 
-Provides a few extra operations on strings; an iterator, the size of a string
-in characters, and a means to read a whole file.
+Provides a few extra operations on strings.
 */
 
 // this is private to be core, so let's define it again ;)
@@ -54,7 +52,7 @@ void lily_xstr__next(lily_state *s)
     int to_copy = index > -1 ? move_table[(uint8_t)input[index]] : 0;
 
     // make a copy!
-    lily_string_val *string_result = lily_new_raw_string_sized(input + index, to_copy);
+    lily_string_val *string_result = lily_new_string_sized(input + index, to_copy);
 
     // and let's move onto the next....
     index += to_copy;
@@ -63,66 +61,49 @@ void lily_xstr__next(lily_state *s)
     }
 
     // pack the character and the next index into a tuple
-    lily_list_val *lv = lily_new_list_val_n(2);
-    lily_list_set_string(lv,0,string_result);
-    lily_list_set_integer(lv,1,index);
+    lily_container_val *lv = lily_new_list(2);
+    lily_nth_set(lv,0,lily_box_string(s,string_result));
+    lily_nth_set(lv,1,lily_box_integer(s,index));
     lily_return_tuple(s,lv);
 }
 
 /**
-define size (s: String): Integer
+define unsafe_str_index (s: String, index: Integer): String
 
-Number of _characters_ in a string
+Lily's `String` class wrongly allowed subscripting a while back. This simulates
+it, until the libraries herein can be weaned off of it by using `ByteString` and
+`Byte` iteration.
 */
-void lily_xstr__size(lily_state *s)
+void lily_xstr__unsafe_str_index(lily_state *s)
 {
-    char *str = lily_arg_string_raw(s,0);
-    int res = 0;
-    while (*str) {
-        ++res;
-        str += move_table[(uint8_t)*str];
-    }
-    lily_return_integer(s, res);
-}
+    char *input = lily_arg_string_raw(s, 0);
+    int index = lily_arg_integer(s, 1);
+    char *ch;
 
-static lily_string_val *fill_string_from_file(FILE *f, int drop_lf)
-{
-    size_t  bufsize = 64;
-    char *buffer = lily_malloc(bufsize);
-    int pos = 0, nread;
-    int nbuf = bufsize/2;
-    while (1) {
-        nread = fread(buffer+pos,1,nbuf,f);
-        pos += nread;
-        if (nread < nbuf) {
-            if (drop_lf && nread > 0)
-               --pos;
-            buffer[pos] = '\0';
-            break;
+    if (index >= 0) {
+        ch = &input[0];
+        while (index && move_table[(unsigned char)*ch] != 0) {
+            ch += move_table[(unsigned char)*ch];
+            index--;
         }
-        if (pos >= bufsize) {
-           nbuf = bufsize;
-           bufsize *= 2;
-           buffer = lily_realloc(buffer,bufsize);
-        }
+        if (move_table[(unsigned char)*ch] == 0)
+            lily_IndexError(s, "Index %d is out of range.\n", index);
     }
-    lily_string_val *sv = lily_new_raw_string_sized(buffer,pos);
-    lily_free(buffer);
-    return sv;
-}
+    else {
+        char *stop = &input[0];
+        int len = lily_string_length(lily_arg_string(s, 0));
+        ch = &input[len];
+        while (stop != ch && index != 0) {
+            ch--;
+            if (move_table[(unsigned char)*ch] != 0)
+                index++;
+        }
+        if (index != 0)
+            lily_IndexError(s, "Index %d is out of range.\n", index);
+    }
 
-
-/**
-define readall (f: File): String
-
-Read the whole of a file as a string.
-Does not check whether the resulting string is valid UTF-8.
-*/
-void lily_xstr__readall(lily_state *s)
-{
-    lily_file_val *filev = lily_arg_file(s,0);
-    lily_file_ensure_readable(s,filev);
-    lily_return_string(s, fill_string_from_file(lily_file_get_raw(filev),0));
+    int count = move_table[(unsigned char)*ch];
+    lily_return_string(s, lily_new_string_sized(ch, count));
 }
 
 /**
@@ -138,13 +119,13 @@ void lily_xstr__parse_i (lily_state *s)
     int64_t return_some = strtoll(s_,&endp, base);
 
     if (*s_ == '\0' ||  *endp != '\0') {
-        lily_return_empty_variant(s, lily_get_none(s));
+        lily_return_none(s);
         return;
     }
     
-    lily_instance_val *some_val = lily_new_some();
-    lily_variant_set_integer(some_val, 0, return_some);
-    lily_return_filled_variant(s,some_val);   
+    lily_container_val *some_val = lily_new_some();
+    lily_nth_set(some_val, 0, lily_box_integer(s, return_some));
+    lily_return_variant(s,some_val);
 }
 
 /**
@@ -159,13 +140,13 @@ void lily_xstr__parse_d (lily_state *s)
     double return_some = strtod(s_,&endp);
 
     if (*s_ == '\0' ||  *endp != '\0') {
-        lily_return_empty_variant(s, lily_get_none(s));
+        lily_return_none(s);
         return;
     }
     
-    lily_instance_val *some_val = lily_new_some();
-    lily_variant_set_double(some_val, 0, return_some);
-    lily_return_filled_variant(s,some_val);   
+    lily_container_val *some_val = lily_new_some();
+    lily_nth_set(some_val, 0, lily_box_double(s, return_some));
+    lily_return_variant(s,some_val);
 }
 
 /**
@@ -176,17 +157,29 @@ Read all the output of a shell command using popen
 void lily_xstr__shell(lily_state *s)
 {
     const char *cmd = lily_arg_string_raw(s,0);
+    lily_msgbuf *msgbuf = lily_new_msgbuf(256);
     FILE *f = popen(cmd,"r");
-    lily_return_string(s, fill_string_from_file(f,1));
+    char buffer[128];
+    int count;
+
+    do {
+        count = fread(buffer, 1, sizeof(buffer), f);
+        buffer[count] = '\0';
+        lily_mb_add(msgbuf, buffer);
+    } while (count == sizeof(buffer));
+
+    lily_string_val *sv = lily_new_string(lily_mb_get(msgbuf));
+    lily_free_msgbuf(msgbuf);
     pclose(f);
+    lily_return_string(s, sv);
 }
 
-static void concat(lily_state *s, lily_msgbuf *msgbuf, char ch, lily_list_val *lv)
+static void concat(lily_state *s, lily_msgbuf *msgbuf, char ch, lily_container_val *lv)
 {
    int i;
    lily_mb_flush(msgbuf);
-   for (i = 0; i < lily_list_num_values(lv); i++) {
-      lily_value *v = lily_list_value(lv,i);
+   for (i = 0; i < lily_container_num_values(lv); i++) {
+      lily_value *v = lily_nth_get(lv,i);
       if (i > 0)
          lily_mb_add_char(msgbuf,ch);
       lily_mb_add_value(msgbuf, s, v);
@@ -200,9 +193,9 @@ Print several values
 */
 void lily_xstr__print(lily_state *s)
 {
-    lily_list_val *lv = lily_arg_list(s,0);
+    lily_container_val *lv = lily_arg_container(s,0);
 
-    lily_msgbuf *msgbuf = lily_get_msgbuf(s);
+    lily_msgbuf *msgbuf = lily_get_clean_msgbuf(s);
     concat(s,msgbuf,'\t',lv);
     lily_mb_add_char(msgbuf,'\n');
     fputs(lily_mb_get(msgbuf),stdout);
@@ -218,11 +211,11 @@ Concatenate some arbitrary values using the single-character delimiter
 void lily_xstr__concat(lily_state *s)
 {
     const char *delim = lily_arg_string_raw(s,0);
-    lily_list_val *lv = lily_arg_list(s,1);
+    lily_container_val *lv = lily_arg_container(s,1);
 
-    lily_msgbuf *msgbuf = lily_get_msgbuf(s);
+    lily_msgbuf *msgbuf = lily_get_clean_msgbuf(s);
     concat(s,msgbuf,delim[0],lv);
-    lily_return_string(s,lily_new_raw_string(lily_mb_get(msgbuf)));
+    lily_return_string(s,lily_new_string(lily_mb_get(msgbuf)));
     lily_mb_flush(msgbuf);
 }
 
@@ -239,50 +232,6 @@ static int char_index(const char *s, int idx, char ch)
 static int convert_i(char d)
 {
     return (int)d - (int)'0';
-}
-
-/**
-define format(fmt: String, values:1...):String
-
-A simplified Python-style formatter
-*/
-void lily_xstr__format(lily_state *s)
-{
-    const char *fmt = lily_arg_string_raw(s,0);
-    lily_list_val *lv = lily_arg_list(s,1);
-
-    int lsize = lily_list_num_values(lv);
-    lily_msgbuf *msgbuf = lily_get_msgbuf(s);
-    lily_mb_flush(msgbuf);
-
-    int idx = 0, last_idx = 0, i_def = 0;
-    while (last_idx != -1) {
-        idx = char_index(fmt,last_idx,'{');
-        if (idx > -1) {
-            if (idx > last_idx)
-                lily_mb_add_range(msgbuf,fmt,last_idx, idx); // just before {
-            // next value
-            int i = i_def;
-            idx++; // skip '{'
-            if (isdigit(fmt[idx])) {
-                i = convert_i(fmt[idx]);
-                idx++;
-            } else {
-                i = i_def++;
-            }
-            if (i >= lsize) {
-                lily_error(s, SYM_CLASS_INDEXERROR, "too many format items");
-            }
-            idx++; // skip '}'
-            lily_value *v = lily_list_value(lv,i);
-            lily_mb_add_value(msgbuf, s, v);
-        }  else { // end of format string
-            lily_mb_add_range(msgbuf,fmt,last_idx, strlen(fmt));
-        }
-        last_idx = idx;
-    }
-    lily_return_string(s,lily_new_raw_string(lily_mb_get(msgbuf)));
-    lily_mb_flush(msgbuf);
 }
 
 /**

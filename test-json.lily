@@ -27,12 +27,12 @@ if map.is_some(): {
    print(m["one"])
 }
 
-j.to_object().and_then{|m|
-   m["two"].to_number().and_then{|x|
+j.to_object().and_then(|m|
+   m["two"].to_number().and_then(|x|
       print(x)
       None  # goes away when Unit arrives
-   }
-}
+   )
+)
 
 # shortcut helper!
 print(json.get(j,"four.4c.name").unwrap().as_string())

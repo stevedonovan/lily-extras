@@ -2,7 +2,6 @@ import sys
 import scan
 import xstr
 var P = xstr.print
-var format = xstr.format
 
 # index of value in a list - like String.find returns None if not present
 define list_find[A](ls: List[A], value: A): Option[Integer] {
@@ -47,7 +46,7 @@ var known_types = [
     "String" => 0, "ByteString" => 0, "File" => 0,
     "Double" => 0, "Integer" => 0, "Boolean" => 0,
     "List" => 1, "Option" => 1,
-    "Hash" => 2, "Either" => 2,
+    "Hash" => 2, "Result" => 2,
     "Function" => 999, "Tuple" => -1
 ]
 
@@ -101,14 +100,14 @@ class Type (name: String, parms: List[Type], parameter_type: Boolean) {
     define tostr: String {
         var pp =""
         if @parms.size() > 0 || @name == "Function": {
-            pp = @parms.map{|t| t.tostr() }.join(",")
+            pp = @parms.map(|t| t.tostr() ).join(",")
             if @name != "Function": {
-                pp  = format("[{}]",pp)
+                pp  = "[{0}]".format(pp)
             else:
                 var rt = ""
                 if @return_type.is_some():
-                    rt = format(" => {}",@return_type.unwrap().tostr())
-                pp = format("({}){}",pp,rt)
+                    rt = " => {0}".format(@return_type.unwrap().tostr())
+                pp = "({0}){1}".format(pp,rt)
             }
         }
         return $"^(@name)^(pp)"
@@ -156,17 +155,17 @@ class FunctionSig (name: String, args: List[Arg], returns: Type, gparms: List[St
         # any generic type parameters?
         var gg = ""
         if @gparms.size() > 0: {
-            gg = format("[{}]", @gparms.join(","))
+            gg = "[{0}]".format(@gparms.join(","))
         }
         # returns a value?
         var tname = ""
         if ! @returns.is_unit(): {
-            tname = format(": {}", @returns.tostr())
+            tname = ": {0}".format(@returns.tostr())
         }
         # any arguments?
         var tt = ""
         if @args.size() > 0: {
-            tt = format("({})", @args.map{|a| a.tostr() }.join(", "))
+            tt = "({0})".format(@args.map(|a| a.tostr() ).join(", "))
         }
         return $" ^(@name)^(gg) ^(tt)^(tname)"
     }
@@ -291,7 +290,7 @@ define parse_function(s: scan.Scan, fname: String): FunctionSig {
     return FunctionSig(fname,args,rtype,gparms)
 }
 
-#### Code Generation
+#*** Code Generation
 # Now that parsing is over, the interesting stuff can begin.
 
 define cond (c: Boolean, value: String, defv: *String=""): String {
@@ -301,7 +300,7 @@ define cond (c: Boolean, value: String, defv: *String=""): String {
 define constructor(t: Type): String {
     var name = t.name
     if name == "List":
-        return "lily_new_list_val_n(values_needed)"
+        return "lily_new_list(values_needed)"
     elif name == "Integer" || name == "Double":
         return "= 0"
     elif name == "String":
@@ -341,7 +340,7 @@ class Codegen {
     define return_none {
         puts("""
     // none branch
-    lily_return_empty_variant(s, lily_get_none(s));
+    lily_return_none(s);
         """)
     }
 
@@ -350,9 +349,9 @@ class Codegen {
         var type = rtype.type()
         puts($"""
     // ^(variant) branch
-    lily_instance_val *^(vname) = lily_new_^(variant)();
-    lily_variant_set_^(type)(^(vname), 0, ^(return_expr(returns,type)));
-    lily_return_filled_variant(s,^(vname));
+    lily_container_val *^(vname) = lily_new_^(variant)();
+    lily_nth_set(^(vname), 0, lily_box_^(type)(s, ^(return_expr(returns,type))));
+    lily_return_variant(s,^(vname));
         """)
     }
 
@@ -374,7 +373,7 @@ class Codegen {
             var parms = a.type.parms
             for i in 0...parms.size()-1:
                 puts($"    lily_push_^(parms[i].type())(s, ??);")
-            #parms.each{|p| puts($"    lily_push_^(p.type())(s, ??);") }
+            #parms.each(|p| puts($"    lily_push_^(p.type())(s, ??);") }
             puts($"    lily_exec_simple(s,^(a.name), ^(parms.size()));")
             var rtype = a.type.return_type
             if rtype.is_some():
@@ -392,7 +391,7 @@ define create_class: String {
     var g = Codegen()
     var name = klass.lower()
     var type = $"lily_^(name)_val"
-    g.puts("typedef struct {\nLILY_FOREIGN_HEADER_WITH_EXTRA(pad)")
+    g.puts("typedef struct {\nLILY_FOREIGN_HEADER")
     g.puts("    // your fields go here")
     g.puts($"} ^(type);\n")
     add_new_type(klass)
@@ -401,14 +400,12 @@ static void destroy_^(name) (lily_generic_val *g)
 {
     ^(type) *result = (^(type)*)g;
     // your cleanup code here"
-    lily_free(g);
 }
     """)
     klass_ctor = $"""
-    return_value = lily_malloc(sizeof (^(type)));
-    return_value->refcount = 0;
-    return_value->instance_id = lily_get_cid_table(s)[^(klass_count)];
-    return_value->destroy_func = destroy_^(name);
+
+    return_value = lily_new_foreign(s, lily_nth_cid(s, ^(klass_count)),
+                                    destroy_^(name), sizeof (^(type)));
 """
     klass_count += 1
     return g.tostr()
@@ -424,7 +421,7 @@ define generate_prototype (F: FunctionSig, method: Boolean): String {
     }
     g.puts($"void lily_^(package)_^(cls)_^(F.name) (lily_state *s)\n{")
     
-    F.args.each{|a| g.define_argument(a) }
+    F.args.each(|a| g.define_argument(a) )
    
     var rtype = F.returns
     var type = F.returns.type()
@@ -435,11 +432,11 @@ define generate_prototype (F: FunctionSig, method: Boolean): String {
     if ! rtype.is_unit(): {
         if rname == "Option": {
             g.return_var("return_some",parms[0])
-        elif rname == "Either":
-            g.return_var("return_right",parms[1])
-            g.return_var("return_left",parms[0])
+        elif rname == "Result":
+            g.return_var("return_success",parms[1])
+            g.return_var("return_failure",parms[0])
         elif rname == "Tuple":
-             parms.each_index {|i|   g.return_var($"return_^(i+1)",parms[i])    }
+             parms.each_index (|i|   g.return_var($"return_^(i+1)",parms[i])    )
         else:
             g.return_var("return_value",rtype)
         }
@@ -449,14 +446,14 @@ define generate_prototype (F: FunctionSig, method: Boolean): String {
         if rname == "Option": {
             g.return_variant("some","return_some",parms[0])
             g.return_none()
-        elif rname == "Either":
+        elif rname == "Result":
             g.return_variant("right","return_right",parms[1])
             g.return_variant("left","return_left",parms[0])
         elif rname == "Tuple":
             g.puts($"    lily_list_val* return_value = lily_new_list_val_n(^(parms.size()));")
-            parms.each_index {|i|
+            parms.each_index (|i|
                 g.puts($"    lily_list_set_^(parms[i-1].type()) (return_value,^(i-1),return_^(i));")
-            }
+            )
             g.return_statement(rtype)
         elif  type == "foreign":  # custom class
             if ctor:
@@ -481,14 +478,14 @@ define existing_entries(path: String): List[String] {
 
     try: {
         var f = File.open(path,"r")
-        text = xstr.readall(f)
+        text = File.read(f).encode().unwrap()
         f.close()
     except IOError as e:
         return functions
     }
 
     var S = scan.Scan("")
-    text.split("\n").each{|line|
+    text.split("\n").each(|line|
         S.reset(line)
         S.next()
         if S.val == ",": {
@@ -503,7 +500,7 @@ define existing_entries(path: String): List[String] {
                 functions.push(S.val)
             }
         }
-    }
+    )
     return functions
 }
 
@@ -515,10 +512,10 @@ var preamble = """
 #include "lily_api_value.h"
 #include "lily_api_msgbuf.h"
 
-#define lily_return_string_raw(s,str) lily_return_string(s,lily_new_raw_string(str))
-#define lily_variant_set_string_raw(v,idx,str) lily_variant_set_string(v, idx, lily_new_raw_string(str))
-#define lily_list_set_string_raw(lv,idx,str) lily_list_set_string(lv,0,lily_new_raw_string(str))
-#define lily_push_string_raw(s,str) lily_push_value(s,lily_new_value_of_string_lit(str))
+#define lily_return_string_raw(s,str) lily_return_string(s,lily_new_string(str))
+#define lily_variant_set_string_raw(v,idx,str) lily_nth_set(v, idx, lily_box_string(lily_new_string(str)))
+#define lily_list_set_string_raw(lv,idx,str) lily_nth_set(lv,0,lily_new_string(str)))
+#define lily_push_string_raw(s,str) lily_push_string(s,lily_new_string(str))
 
 // your own headers go here...
 """

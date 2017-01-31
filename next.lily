@@ -1,6 +1,5 @@
 # Some xstr examples for
 # next, size
-# readall
 # shell
 
 import xstr
@@ -25,7 +24,7 @@ class StrIter(s: String) {
 # iterate over all characters, multibye or not
 var s = "Δn=α"
 var iter = StrIter(s)
-print(xstr.size(s))
+print(s.to_bytestring().size())
 var k = 0
 while iter.next(): {
    print($"character '^(iter.char)'")
@@ -33,19 +32,11 @@ while iter.next(): {
 #   if k > 6: break
 }
 
-# slurp in the whole of this file
-var f = File.open("Makefile","r")
-var all = xstr.readall(f)
-f.close()
-
-# number of _characters_ in all
-print(xstr.size(all))
-
 var shell = xstr.shell
-shell("ls *.lly").split("\n").each{|file|
-   var size = shell($"stat -c %s ^(file)")
+shell("ls *.lly").rstrip("\n").split("\n").each(|file|
+   var size = shell($"stat -c %s ^(file)").rstrip("\n")
    print($"^(file): ^(size)b")
-}
+)
 
 print(shell("which lilyu 2>&1"))
 

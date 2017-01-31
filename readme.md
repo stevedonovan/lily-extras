@@ -14,14 +14,13 @@ the character at the index, and the index of the next character.
 The returned index is -1 for the last character; thereafter ["",-1]
 is returned.
 
+At the time this was written, Lily didn't have the ability to iterate over
+characters. Now, `ByteString` provides `.each_byte` and there are single-quote
+`Byte` literals that can be used in place of this.
+
 ###define size (s: String): Integer
 
 Number of _characters_ in a string
-
-define readall (f: File): String
-
-Read the whole of a file as a string.
-Does not check whether the resulting string is valid UTF-8.
 
 ###define parse_i (s: String, base: *Integer=10): Option[Integer]
 
