@@ -7,14 +7,14 @@
 define assert(v: Boolean, msg: *String = "") {
    if ! v: {
       var ct = calltrace()
-      if ! msg:
+      if msg == "":
          msg = $"assertion failed ^(ct[0])"
       stderr.print(msg)
    }
 }
 
 define abs(x: Double): Double {
-   if x < 0: x = -1.0*x
+   if x < 0.0: x = -1.0*x
    return x
 }
 

@@ -1,10 +1,10 @@
 
 enum Object {
-    S(String)
-    N(Double)
-    A(List[Object])
-    O(Hash[String,Object])
-    Null
+    S(String),
+    N(Double),
+    A(List[Object]),
+    O(Hash[String,Object]),
+    Null,
     B(Boolean)
 
     define as_str: String {
@@ -14,11 +14,11 @@ enum Object {
        case N(n):
           return $"^(n)"
        case A(l):
-          var out = l.map{|v| v.as_str() }.join(",")
+          var out = l.map(|v| v.as_str() ).join(",")
           return $"[^(out)]"
        case O(m):
           var out: List[String] = []
-          m.each_pair {|k,v| out.push($"\"^(k)\":^(v.as_str())") }
+          m.each_pair (|k,v| out.push($"\"^(k)\":^(v.as_str())") )
           var str = out.join(",")
           return $"{^(str)}"
         case Null:
@@ -89,19 +89,19 @@ enum Object {
     }
 
     define as_string_array: List[String] {
-        return as_array().map{|e| e.as_string() }
+        return as_array().map(|e| e.as_string() )
     }
 
     define as_number_array: List[Double] {
-        return as_array().map{|e| e.as_number() }
+        return as_array().map(|e| e.as_number() )
     }
 
     define as_object_of_strings: Hash[String,String] {
-        return as_object().map_values{|e| e.as_string() }
+        return as_object().map_values(|e| e.as_string() )
     }
 
     define as_object_of_numbers: Hash[String,Double] {
-        return as_object().map_values{|e| e.as_number() }
+        return as_object().map_values(|e| e.as_number() )
     }
 
     #~ define get_strings(path: String): List[String] {

@@ -26,7 +26,7 @@ while type != scan.End: {
     if tok.val == "//": { # skip rest of line
       tok.skip_line()
     elif tok.val == "/*":
-       tok.skip_while{|ch| ch != "*/"}
+       tok.skip_while(|ch| ch != "*/")
        tok.next()
     else:
       print($"^(tok.type): '^(tok.val)'")

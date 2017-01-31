@@ -41,11 +41,11 @@ class Iter(s: String) {
 
 ## the kinds of token that are output by `Scan`
 enum TokenType {
-   Char
-   Iden
-   Num
-   Str
-   Key
+   Char,
+   Iden,
+   Num,
+   Str,
+   Key,
    End
 }
 
@@ -83,11 +83,11 @@ class Scan(si: String){
       var extras = @extras
       for i in 0...toks.size()-1:  {
          var tok = toks[i]
-         if xstr.size(tok) > 1: {         
-            var first = tok[0]
+         if tok.to_bytestring().size() > 1: {
+            var first = xstr.unsafe_str_index(tok, 0)
             if ! extras.has_key(first):
                 extras[first] = []
-            extras[first].push(tok[1])
+            extras[first].push(xstr.unsafe_str_index(tok, 1))
          }
       }
    }
@@ -156,7 +156,7 @@ class Scan(si: String){
 
    ## rest of current line
    define collect_line: String {
-      return collect_while {|ch| ch != "\n" }
+      return collect_while (|ch| ch != "\n" )
    }
 
    ## ignore any following characters that match the predicate
@@ -168,7 +168,7 @@ class Scan(si: String){
   
    ## ignore the rest of the line
    define skip_line {
-      skip_while{|ch| ch != "\n"}
+      skip_while(|ch| ch != "\n")
    }
    
    ## skip any following whitespace
@@ -186,7 +186,7 @@ class Scan(si: String){
          skip_space()
       elif @char == @block_comment_start: 
          var endch = @block_comment_end
-         skip_while{|ch| ch != endch}
+         skip_while(|ch| ch != endch)
          get() # past the end
          skip_space()
       }      
@@ -221,7 +221,7 @@ class Scan(si: String){
             set(Str,"")
             get()
          else:
-            set(Str,collect_while {|c| c != ch})
+            set(Str,collect_while (|c| c != ch))
             get()
          }
       else:
@@ -245,7 +245,9 @@ class Scan(si: String){
 
    ## expecting either of two characters
    define expecting_either_char(chars: String) {
-      var ch1 = chars[0], ch2 = chars[1]
+      var ch1 = xstr.unsafe_str_index(chars,0),
+          ch2 = xstr.unsafe_str_index(chars,1)
+
       next()
       if ! (@type == Char && (@val == ch1) || (@val == ch2)):
          error($"expecting '^(ch1)' or '^(ch2)' got ^(token_name())")

@@ -27,9 +27,9 @@ define parse_d(str: String): Double {
 }
 
 enum Type {
-   BooleanType
-   StringType
-   IntegerType
+   BooleanType,
+   StringType,
+   IntegerType,
    DoubleType
 
    define parse_value(str: String): Dynamic {
@@ -146,19 +146,19 @@ class Args (str: String) < scan.Scan("") {
    }
 
    define argument_from_name(name: String): Argument {
-      var oa = argument_by_predicate{|a| a.name == name }
+      var oa = argument_by_predicate(|a| a.name == name )
       if oa.is_none():  error($"no such long flag '^(name)'")
       return oa.unwrap()
    }
 
    define argument_from_short(name: String): Argument {
-      var oa = argument_by_predicate{|a| a.short == name }
+      var oa = argument_by_predicate(|a| a.short == name )
       if oa.is_none():  error($"no such short flag '^(name)'")
       return oa.unwrap()
    }
    
    define argument_from_position(posn: Integer): Argument {
-      var oa = argument_by_predicate{|a| a.posn == posn}
+      var oa = argument_by_predicate(|a| a.posn == posn)
       if oa.is_none():  error($"no such positional argument '^(posn)'")
       return oa.unwrap()
    }
@@ -175,7 +175,7 @@ class Args (str: String) < scan.Scan("") {
       skip_space()
       if @char == "--": {
          get()
-         name = collect_while{|c| c != "," && c != " "}
+         name = collect_while(|c| c != "," && c != " ")
          if @char == ",": {
             get()
             skip_space()
@@ -189,7 +189,7 @@ class Args (str: String) < scan.Scan("") {
          }
       elif @char == "<": # a positional argument
          get()
-         name = collect_while{|c| c != ">"}
+         name = collect_while(|c| c != ">")
          short = ""
          posn = @pos
          @pos += 1
@@ -218,7 +218,7 @@ class Args (str: String) < scan.Scan("") {
    }
 
    tokens("--")
-   @lines.each{|s| parse_line(s) }
+   @lines.each(|s| parse_line(s) )
 
    define parse_args(ls: List[String]) {
       var i = 1, k = 1
@@ -228,7 +228,7 @@ class Args (str: String) < scan.Scan("") {
          i += 1
          if i > end: error($"flag ^(flag) needs a value")
          var arg = ls[i]
-         if arg[0] == "-": error($"flag ^(flag) needs a value")
+         if xstr.unsafe_str_index(arg,0) == "-": error($"flag ^(flag) needs a value")
          return arg
       }
       
@@ -274,20 +274,20 @@ class Args (str: String) < scan.Scan("") {
       }
       print("finis")
 
-      @arguments.each{|a|
+      @arguments.each(|a|
          if ! a.is_set: a.check()
          print(a.tostr())
-      }
+      )
 
    }
    
    define clear {
       @pos = 1   
-      @arguments.each{|a| a.clear() }
+      @arguments.each(|a| a.clear() )
    }
    
    define assignments {
-      @arguments.each{|a| a.assignment() }
+      @arguments.each(|a| a.assignment() )
    }
 
    define string(name: String): String {
